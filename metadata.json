@@ -1,0 +1,5 @@
+{
+  "name": "Browser Launch Orchestrator",
+  "description": "A full-stack application that detects login targets based on email domains and simulates launching browser containers.",
+  "requestFramePermissions": []
+}
