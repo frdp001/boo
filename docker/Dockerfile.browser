@@ -1,0 +1,32 @@
+# This image is used for the isolated browser instances
+FROM ubuntu:22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Chromium and dependencies for remote display
+RUN apt-get update && apt-get install -y \
+    chromium-browser \
+    xvfb \
+    x11vnc \
+    fluxbox \
+    novnc \
+    websockify \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up the environment
+ENV DISPLAY=:0
+ENV START_URL="https://www.google.com"
+
+# Create a startup script
+RUN echo '#!/bin/bash\n\
+Xvfb :0 -screen 0 1280x1024x24 &\n\
+fluxbox &\n\
+x11vnc -display :0 -forever -nopw -listen localhost -xkb &\n\
+/usr/share/novnc/utils/launch.sh --vnc localhost:5900 --listen 80 &\n\
+chromium-browser --no-sandbox --disable-setuid-sandbox --start-maximized "$START_URL"\n\
+' > /start.sh && chmod +x /start.sh
+
+EXPOSE 80
+
+CMD ["/start.sh"]

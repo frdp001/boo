@@ -1,0 +1,7 @@
+{
+  "policies": {
+    "Extensions": {
+      "Install": ["file:///extension/manifest.json"]
+    }
+  }
+}
