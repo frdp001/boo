@@ -25,8 +25,18 @@ import {
   ShieldAlert,
   Zap,
   ShieldOff,
-  Code
+  Code,
+  MessageSquare,
+  Send
 } from "lucide-react";
+
+interface ChatMessage {
+  id: number;
+  user_id: string;
+  username: string;
+  message: string;
+  timestamp: string;
+}
 
 interface DomainMapping {
   id: number;
@@ -70,7 +80,17 @@ interface Container {
   status: string;
   ip_address: string;
   remote_url: string;
+  last_active: string;
   created_at: string;
+}
+
+interface ScalingMetric {
+  id: number;
+  total_cpu: number;
+  total_memory: number;
+  active_containers: number;
+  strategy: string;
+  timestamp: string;
 }
 
 interface LaunchResponse {
@@ -95,7 +115,7 @@ export default function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [newDomain, setNewDomain] = useState({ domain: "", login_url: "" });
   const [activeTab, setActiveTab] = useState<"browser" | "terminal">("browser");
-  const [mainTab, setMainTab] = useState<"orchestrator" | "config" | "containers" | "logs" | "vault" | "firewall">("orchestrator");
+  const [mainTab, setMainTab] = useState<"orchestrator" | "config" | "containers" | "logs" | "vault" | "firewall" | "chat" | "scaling">("orchestrator");
   const [copiedLink, setCopiedLink] = useState(false);
   const [stats, setStats] = useState({ cpu: 12.4, memory: 456, uptime: 0 });
   const [activeContainers, setActiveContainers] = useState<Container[]>([]);
@@ -104,6 +124,59 @@ export default function App() {
   const [firewallRules, setFirewallRules] = useState<FirewallRule[]>([]);
   const [newRule, setNewRule] = useState({ source_ip: "", action: "DROP" as const, description: "" });
   const [visibleJson, setVisibleJson] = useState<Record<number, boolean>>({});
+  
+  // Scaling State
+  const [scalingMetrics, setScalingMetrics] = useState<ScalingMetric[]>([]);
+  
+  // Chat State
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [socket, setSocket] = useState<WebSocket | null>(null);
+  const [visitorId] = useState(() => {
+    const saved = localStorage.getItem("ops_visitor_id");
+    if (saved) return saved;
+    const fresh = "operator_" + Math.random().toString(36).substring(7);
+    localStorage.setItem("ops_visitor_id", fresh);
+    return fresh;
+  });
+
+  useEffect(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = window.location.host;
+    const ws = new WebSocket(`${protocol}//${host}`);
+
+    ws.onmessage = (event) => {
+      const payload = JSON.parse(event.data);
+      if (payload.type === "history") {
+        setMessages(payload.data);
+      } else if (payload.type === "message") {
+        setMessages((prev) => [...prev, payload.data]);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log("[Chat] Socket closed. Retrying...");
+      // In a real app we'd add reconnect logic here
+    };
+
+    setSocket(ws);
+    return () => ws.close();
+  }, []);
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !socket) return;
+
+    socket.send(JSON.stringify({
+      type: "message",
+      data: {
+        user_id: visitorId,
+        username: visitorId.split("_")[1].toUpperCase(),
+        message: chatInput
+      }
+    }));
+    setChatInput("");
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => setIsBooting(false), 2000);
@@ -112,8 +185,16 @@ export default function App() {
     fetchLogs();
     fetchSessions();
     fetchRules();
+    fetchScalingMetrics();
     return () => clearTimeout(timer);
   }, []);
+
+  const fetchScalingMetrics = () => {
+    fetch("/api/scaling-metrics")
+      .then((res) => res.json())
+      .then((data) => setScalingMetrics(data))
+      .catch((err) => console.error("Failed to fetch scaling metrics", err));
+  };
 
   const fetchRules = () => {
     fetch("/api/firewall-rules")
@@ -362,6 +443,21 @@ export default function App() {
             className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "firewall" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
           >
             Network_Firewall
+          </button>
+          <button 
+            onClick={() => setMainTab("chat")}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "chat" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            Chat_Ops
+          </button>
+          <button 
+            onClick={() => {
+              setMainTab("scaling");
+              fetchScalingMetrics();
+            }}
+            className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "scaling" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
+          >
+            Elastic_Scaling
           </button>
         </div>
 
@@ -1101,6 +1197,194 @@ iptables -L DOCKER-USER -n`}</pre>
               <p className="text-[11px] opacity-60 leading-relaxed max-w-2xl">
                 The session vault captures identity tokens in real-time as users navigate the remote browser. These tokens can be imported into a local browser using extension-based cookie managers to bypass MFA and hijack authenticated sessions. Use the "Sync Vault" button to pull the latest exfiltrated data from the orchestrator's central database.
               </p>
+            </div>
+          </div>
+        </div>
+      ) : mainTab === "chat" ? (
+        <div className="flex-grow flex flex-col p-8 bg-[#E4E3E0] overflow-hidden">
+          <div className="max-w-4xl mx-auto w-full flex-grow flex flex-col overflow-hidden bg-white border border-[#141414] border-opacity-10 shadow-sm">
+            {/* Chat Header */}
+            <div className="p-6 border-b border-[#141414] border-opacity-10 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 bg-[#141414] text-white flex items-center justify-center">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-light">Ops Command Chat</h2>
+                  <p className="text-[10px] opacity-50 uppercase tracking-widest font-mono">Real-time clandestine coordination</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                <span className="text-[9px] uppercase tracking-widest font-bold font-mono">Channel Verified</span>
+              </div>
+            </div>
+
+            {/* Chat Messages */}
+            <div className="flex-grow overflow-y-auto p-6 space-y-4">
+              {messages.length === 0 ? (
+                <div className="h-full flex items-center justify-center opacity-30 italic text-sm">
+                  Waiting for transmission...
+                </div>
+              ) : (
+                messages.map((msg) => (
+                  <div key={msg.id} className={`flex flex-col ${msg.user_id === visitorId ? "items-end" : "items-start"}`}>
+                    <div className="flex items-center gap-2 mb-1 px-1">
+                      <span className="text-[8px] font-bold uppercase tracking-widest text-[#141414] opacity-40">{msg.username}</span>
+                      <span className="text-[8px] opacity-20">{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div className={`max-w-[80%] p-4 text-xs leading-relaxed ${
+                      msg.user_id === visitorId 
+                        ? "bg-[#141414] text-white" 
+                        : "bg-gray-100 border border-[#141414] border-opacity-5"
+                    }`}>
+                      {msg.message}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Chat Input */}
+            <form onSubmit={handleSendMessage} className="p-6 border-t border-[#141414] border-opacity-10 bg-gray-50 flex gap-4">
+              <input 
+                type="text" 
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Secure message transmission..."
+                className="flex-grow bg-white border border-[#141414] border-opacity-10 p-4 text-xs focus:outline-none focus:ring-1 focus:ring-[#141414] font-mono"
+              />
+              <button 
+                type="submit"
+                disabled={!chatInput.trim()}
+                className="bg-[#141414] text-white px-8 py-4 text-[10px] uppercase tracking-widest font-bold disabled:opacity-20 hover:bg-opacity-90 transition-all flex items-center gap-2"
+              >
+                <Send className="w-3 h-3" /> Execute
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : mainTab === "scaling" ? (
+        <div className="flex-grow p-12 bg-[#E4E3E0] overflow-y-auto">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center justify-between mb-12">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-[#141414] text-white flex items-center justify-center">
+                  <Zap className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-light tracking-tight">Elastic Scaling Monitor</h2>
+                  <p className="text-xs opacity-50 font-mono uppercase tracking-widest">Autonomous Resource Management</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 px-4 py-2 bg-white border border-[#141414] border-opacity-10 text-[10px] uppercase tracking-widest">
+                  <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                  Auto-Scaler: Online
+                </div>
+                <button 
+                  onClick={fetchScalingMetrics}
+                  className="flex items-center gap-2 px-4 py-2 border border-[#141414] text-[10px] uppercase tracking-widest hover:bg-[#141414] hover:text-[#E4E3E0] transition-all"
+                >
+                  <RefreshCw className="w-3 h-3" /> Refresh Metrics
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+              <div className="bg-white border border-[#141414] border-opacity-10 p-8 shadow-sm">
+                <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-30 mb-4">Current Load</h4>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-4xl font-light">{scalingMetrics[0]?.total_cpu.toFixed(1) || "0.0"}%</span>
+                  <span className="text-xs opacity-40 font-mono uppercase">Total CPU</span>
+                </div>
+                <div className="mt-4 h-1 bg-gray-100 w-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${scalingMetrics[0]?.total_cpu || 0}%` }}
+                    className="h-full bg-[#141414]"
+                  />
+                </div>
+              </div>
+              <div className="bg-white border border-[#141414] border-opacity-10 p-8 shadow-sm">
+                <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-30 mb-4">Memory Allocation</h4>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-4xl font-light">{(scalingMetrics[0]?.total_memory / 1024).toFixed(1) || "0.0"}</span>
+                  <span className="text-xs opacity-40 font-mono uppercase">GB Used</span>
+                </div>
+                <div className="mt-4 text-[10px] opacity-40 uppercase tracking-widest">Shared Memory Cluster</div>
+              </div>
+              <div className="bg-white border border-[#141414] border-opacity-10 p-8 shadow-sm">
+                <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-30 mb-4">Active Fleet</h4>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-4xl font-light">{scalingMetrics[0]?.active_containers || 0}</span>
+                  <span className="text-xs opacity-40 font-mono uppercase">Instances</span>
+                </div>
+                <div className="mt-4 flex items-center gap-2">
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                    scalingMetrics[0]?.strategy === 'THROTTLING' ? 'bg-orange-100 text-orange-700' : 'bg-emerald-100 text-emerald-700'
+                  }`}>
+                    {scalingMetrics[0]?.strategy || 'IDLE'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white border border-[#141414] border-opacity-10 overflow-hidden shadow-sm">
+              <div className="p-6 border-b border-[#141414] border-opacity-10 flex items-center justify-between bg-gray-50 bg-opacity-50">
+                <h3 className="text-sm font-bold uppercase tracking-widest">Telemetry History</h3>
+                <span className="text-[9px] font-mono opacity-40">LAST 50 SCALE EVENTS</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-[#141414] text-[#E4E3E0] text-[9px] uppercase tracking-widest">
+                    <tr>
+                      <th className="px-6 py-4 font-bold">Snapshot_ID</th>
+                      <th className="px-6 py-4 font-bold">Fleet_Size</th>
+                      <th className="px-6 py-4 font-bold">CPU_Util</th>
+                      <th className="px-6 py-4 font-bold">MEM_Alloc</th>
+                      <th className="px-6 py-4 font-bold">Scaling_Strategy</th>
+                      <th className="px-6 py-4 font-bold text-right">Timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#141414] divide-opacity-5">
+                    {scalingMetrics.map((m) => (
+                      <tr key={m.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 text-[10px] font-mono opacity-60">metrics_{m.id}</td>
+                        <td className="px-6 py-4 text-[10px] font-bold">{m.active_containers} Units</td>
+                        <td className="px-6 py-4 text-[10px] font-mono">{m.total_cpu.toFixed(2)}%</td>
+                        <td className="px-6 py-4 text-[10px] font-mono">{(m.total_memory / 1024).toFixed(1)}GB</td>
+                        <td className="px-6 py-4">
+                          <span className={`text-[9px] font-mono uppercase tracking-widest px-2 py-1 ${
+                            m.strategy === 'THROTTLING' ? 'text-orange-600 bg-orange-50' : 'text-emerald-600 bg-emerald-50'
+                          }`}>
+                            {m.strategy}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-[10px] text-right font-mono opacity-50">{new Date(m.timestamp).toLocaleTimeString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="p-8 border border-[#141414] border-opacity-10 bg-white shadow-sm">
+                <h5 className="font-serif italic text-xl mb-4">Reaping Policy</h5>
+                <p className="text-[11px] opacity-60 leading-relaxed">
+                  To optimize resource costs and security surface area, the orchestrator automatically terminates instances that have remained idle for more than 5 minutes. Idle detection is based on audit heartbeat activity (keystrokes) and session sync events.
+                </p>
+              </div>
+              <div className="p-8 border border-[#141414] border-opacity-10 bg-[#141414] text-white shadow-xl">
+                <div className="flex items-center gap-3 mb-4">
+                  <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                  <h5 className="text-[10px] uppercase tracking-widest font-bold">Dynamic Cluster Safety</h5>
+                </div>
+                <p className="text-[11px] opacity-70 leading-relaxed font-light">
+                  If global CPU utilization exceeds 80%, the orchestrator enters "THROTTLING" mode, preventing new browser spawns until resource availability returns to optimal levels. This ensures cluster stability and prevents hardware exhaustion.
+                </p>
+              </div>
             </div>
           </div>
         </div>
