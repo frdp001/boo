@@ -191,9 +191,16 @@ export default function App() {
 
   const fetchScalingMetrics = () => {
     fetch("/api/scaling-metrics")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+          throw new TypeError("Oops, we haven't got JSON!");
+        }
+        return res.json();
+      })
       .then((data) => setScalingMetrics(data))
-      .catch((err) => console.error("Failed to fetch scaling metrics", err));
+      .catch((err) => console.error("Failed to fetch scaling metrics:", err));
   };
 
   const fetchRules = () => {
@@ -380,7 +387,7 @@ export default function App() {
       <header className="border-b border-[#141414] p-6 flex justify-between items-center">
         <div className="flex items-center gap-3">
           <Terminal className="w-6 h-6" />
-          <h1 className="font-serif italic text-xl tracking-tight">Orchestrator v1.0</h1>
+          <h1 className="font-serif italic text-xl tracking-tight">BLO v1.0</h1>
         </div>
         <div className="flex items-center gap-6 text-[11px] uppercase tracking-widest opacity-50">
           <button 
@@ -400,7 +407,7 @@ export default function App() {
             onClick={() => setMainTab("orchestrator")}
             className={`py-4 text-[10px] uppercase tracking-[0.2em] font-bold transition-all ${mainTab === "orchestrator" ? "border-b-2 border-[#141414] opacity-100" : "opacity-30 hover:opacity-100"}`}
           >
-            Launch_Orchestrator
+            Launch_BLO
           </button>
           <button 
             onClick={() => setMainTab("config")}
@@ -819,7 +826,7 @@ export default function App() {
                   onClick={() => setLaunchStatus("idle")}
                   className="px-6 py-2 border border-[#141414] text-xs uppercase tracking-widest hover:bg-[#141414] hover:text-[#E4E3E0] transition-all"
                 >
-                  Reset Orchestrator
+                  Reset BLO
                 </button>
               </motion.div>
             )}
@@ -981,7 +988,7 @@ ARGS: --kiosk mode enabled by default`}</pre>
                   </div>
                 </div>
                 <div className="space-y-6">
-                  <h4 className="font-serif italic text-xl">The Orchestrator</h4>
+                  <h4 className="font-serif italic text-xl">BLO Control Plane</h4>
                   <p className="text-sm opacity-70 leading-relaxed">
                     The Node.js backend acts as the control plane. By mounting the Docker Socket, it can programmatically spawn, monitor, and destroy Firefox containers on the host machine.
                   </p>
@@ -1481,7 +1488,7 @@ iptables -L DOCKER-USER -n`}</pre>
       <footer className="fixed bottom-0 left-0 right-0 border-t border-[#141414] p-4 flex justify-between items-center text-[9px] uppercase tracking-[0.2em] opacity-40 bg-[#E4E3E0]">
         <span>Node: EU-WEST-2</span>
         <span>Runtime: Node.js + SQLite</span>
-        <span>© 2026 Browser Launch Orchestrator</span>
+        <span>© 2026 BLO</span>
       </footer>
     </div>
   );

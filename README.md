@@ -75,6 +75,19 @@ The custom extension is located in the `/extension` directory. It is automatical
 | `PORT` | The port the orchestrator listens on | `3000` |
 | `NODE_ENV` | Environment mode (`development`/`production`) | `development` |
 | `DOCKER_BROWSER_IMAGE` | The Firefox image to use | `jlesage/firefox:latest` |
+| `PUBLIC_HOST` | The public IP/Hostname of the server | `localhost` |
+
+## Public Access (EC2 / Cloud Deployment)
+
+When deploying on a cloud provider like Amazon EC2, you must configure the following for remote browsers to be accessible from your local machine:
+
+1. **Environment Variable**: Set `PUBLIC_HOST` to your EC2 instance's **Public IPv4 address** or **Public IPv4 DNS**.
+   ```bash
+   export PUBLIC_HOST="3.x.x.x"
+   ```
+2. **Security Groups**: Open the following ports in your EC2 Security Group:
+   - `3000`: For the Orchestrator Web UI.
+   - `6000-7000`: For the remote browser VNC/Web sessions (configurable range).
 
 ## Deployment Checklist
 

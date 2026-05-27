@@ -186,6 +186,11 @@ async function startServer() {
     });
   });
 
+  app.get("/api/scaling-metrics", (req, res) => {
+    const metrics = db.prepare("SELECT * FROM scaling_metrics ORDER BY timestamp DESC LIMIT 50").all();
+    res.json(metrics);
+  });
+
   app.get("/api/firewall-rules", (req, res) => {
     const rules = db.prepare("SELECT * FROM firewall_rules ORDER BY created_at DESC").all();
     const protocol = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
@@ -369,7 +374,8 @@ async function startServer() {
     const containerId = `container_${Math.random().toString(36).substring(7)}`;
     const containerName = `firefox_${domain}_${Math.random().toString(36).substring(7)}`;
     const port = 6000 + Math.floor(Math.random() * 1000);
-    const remoteUrl = `http://localhost:${port}`;
+    const publicHost = process.env.PUBLIC_HOST || "localhost";
+    const remoteUrl = `http://${publicHost}:${port}`;
     const ipAddress = `172.17.0.${Math.floor(Math.random() * 254) + 1}`;
 
     // Firefox policies to force-load the extension
@@ -377,11 +383,14 @@ async function startServer() {
     
     const docker_command = `docker run -d \\
   --name ${containerName} \\
+  --shm-size=2g \\
+  --cap-add=SYS_ADMIN \\
+  -e MOZ_DISABLE_CONTENT_SANDBOX=1 \\
   -p ${port}:5800 \\
   -v ${path.join(process.cwd(), 'extension')}:/extension:ro \\
   -v ${path.join(process.cwd(), 'distribution', 'policies.json')}:/usr/lib/firefox/distribution/policies.json:ro \\
-  -e APP_ARGS="--kiosk ${login_url}" \\
-  jlesage/firefox:latest`;
+  jlesage/firefox:latest \\
+  bash -c "Xvfb :99 -screen 0 1280x1024x24 & export DISPLAY=:99 && firefox --kiosk ${login_url}"`;
 
     // Persist container
     db.prepare(`
@@ -419,11 +428,6 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
-
-  app.get("/api/scaling-metrics", (req, res) => {
-    const metrics = db.prepare("SELECT * FROM scaling_metrics ORDER BY timestamp DESC LIMIT 50").all();
-    res.json(metrics);
-  });
 
   server.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on port ${PORT} (0.0.0.0)`);
