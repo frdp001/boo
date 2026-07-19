@@ -27,7 +27,8 @@ import {
   ShieldOff,
   Code,
   MessageSquare,
-  Send
+  Send,
+  Cloud
 } from "lucide-react";
 
 interface ChatMessage {
@@ -118,6 +119,7 @@ export default function App() {
   const [mainTab, setMainTab] = useState<"orchestrator" | "config" | "containers" | "logs" | "vault" | "firewall" | "chat" | "scaling">("orchestrator");
   const [copiedLink, setCopiedLink] = useState(false);
   const [stats, setStats] = useState({ cpu: 12.4, memory: 456, uptime: 0 });
+  const [dashboardTunnelUrl, setDashboardTunnelUrl] = useState<string | null>(null);
   const [activeContainers, setActiveContainers] = useState<Container[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [capturedSessions, setCapturedSessions] = useState<CapturedSession[]>([]);
@@ -186,6 +188,16 @@ export default function App() {
     fetchSessions();
     fetchRules();
     fetchScalingMetrics();
+
+    fetch("/api/health")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.dashboard_tunnel_url) {
+          setDashboardTunnelUrl(data.dashboard_tunnel_url);
+        }
+      })
+      .catch((err) => console.error("Failed to fetch health info:", err));
+
     return () => clearTimeout(timer);
   }, []);
 
@@ -390,6 +402,16 @@ export default function App() {
           <h1 className="font-serif italic text-xl tracking-tight">BLO v1.0</h1>
         </div>
         <div className="flex items-center gap-6 text-[11px] uppercase tracking-widest opacity-50">
+          {dashboardTunnelUrl && (
+            <a 
+              href={dashboardTunnelUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 bg-amber-500/10 text-amber-800 border border-amber-500/20 px-2.5 py-1 rounded text-[9px] hover:bg-amber-500/20 transition-all font-mono normal-case tracking-normal"
+            >
+              <Cloud className="w-3.5 h-3.5 text-amber-600 animate-pulse" /> Tunnel Active: {dashboardTunnelUrl.replace("https://", "")}
+            </a>
+          )}
           <button 
             onClick={() => setShowAdmin(!showAdmin)}
             className="hover:opacity-100 transition-opacity flex items-center gap-1"

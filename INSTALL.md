@@ -188,7 +188,39 @@ sudo systemctl restart nginx
 
 ---
 
-## 7. Troubleshooting & Production Fallbacks
+## 7. Zero-Config Cloudflare Tunneling (Dynamic cloudflared)
+
+BLO features built-in, zero-configuration Cloudflare Tunneling support via `cloudflared`. When enabled, the orchestrator dynamically creates secure tunnels for both the control dashboard and individual container browser sessions. This eliminates the need to expose ports 3000 or 6000-7000 in security groups or firewalls!
+
+### Step 1: Install cloudflared on the Host Server
+Download and register the Cloudflare daemon on your host OS:
+
+```bash
+# For Debian/Ubuntu-based servers
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared bullseye main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt update && sudo apt install cloudflared -y
+
+# Verify the installation is active
+cloudflared --version
+```
+
+### Step 2: Enable Tunneling in the .env File
+Simply add the following line to your active `.env` file on the host machine:
+
+```env
+CLOUDFLARE_TUNNEL_ENABLED="true"
+```
+
+### Step 3: Architecture & Security Flow
+1. **Dashboard (Control Plane)**: During startup, BLO spawns a background `cloudflared` process pointing to the dashboard's local port (e.g., `3000`). It automatically parses Cloudflare's registration output to retrieve a secure, public `*.trycloudflare.com` URL. This is displayed in the header of the BLO interface.
+2. **Dynamic Browser Containers**: When an operator initializes a remote browser session, BLO allocates an ephemeral local port (e.g., `6542`) and spawns a container-specific `cloudflared` tunnel in parallel. The generated secure `trycloudflare.com` URL is registered as the session's active `remote_url`, allowing immediate, portless, SSL-encrypted connection directly inside the operator's frame workspace.
+3. **Graceful Cleanup**: When a browser container is terminated or reaped, BLO cleanly kills the associated background `cloudflared` process on the host, preventing CPU/memory and connection-channel leaks.
+
+---
+
+## 8. Troubleshooting & Production Fallbacks
 
 ### Issue 1: Firefox Browser Crashes with `Tab crashed` or `IPC failure`
 - **Cause**: Firefox handles parallel pages by utilizing Linux `/dev/shm` (shared memory). By default, Docker containers limit shared memory to just `64MB`.

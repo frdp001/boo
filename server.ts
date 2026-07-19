@@ -7,11 +7,91 @@ import dns from "dns";
 import { promisify } from "util";
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import { spawn, ChildProcess } from "child_process";
 
 const resolveMx = promisify(dns.resolveMx);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Active Cloudflare Tunnels mapping
+const activeTunnels = new Map<string, { process: ChildProcess; url: string }>();
+let dashboardTunnelUrl: string | null = null;
+
+function startCloudflareTunnel(port: number, identifier: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    console.log(`[CloudflareTunnel] Spawning tunnel for port ${port} (${identifier})...`);
+    
+    // We launch cloudflared tunnel --url http://localhost:port
+    const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`]);
+    
+    let resolved = false;
+    let errorOutput = "";
+
+    activeTunnels.set(identifier, { process: child, url: "" });
+
+    // Stream both stdout and stderr since cloudflared output logs are system-dependent
+    const onData = (data: Buffer) => {
+      const output = data.toString();
+      errorOutput += output;
+      
+      const match = output.match(/https:\/\/[a-zA-Z0-9.-]+\.trycloudflare\.com/);
+      if (match && !resolved) {
+        resolved = true;
+        const tunnelUrl = match[0];
+        console.log(`[CloudflareTunnel] Success! Tunnel created for port ${port} (${identifier}): ${tunnelUrl}`);
+        
+        const tunnelObj = activeTunnels.get(identifier);
+        if (tunnelObj) {
+          tunnelObj.url = tunnelUrl;
+        }
+        
+        resolve(tunnelUrl);
+      }
+    };
+
+    child.stderr.on("data", onData);
+    child.stdout.on("data", onData);
+
+    child.on("close", (code) => {
+      console.log(`[CloudflareTunnel] Process closed with code ${code} for ${identifier}`);
+      activeTunnels.delete(identifier);
+      if (!resolved) {
+        reject(new Error(`cloudflared exited early with code ${code}. Error output: ${errorOutput.slice(-200)}`));
+      }
+    });
+
+    child.on("error", (err) => {
+      console.error(`[CloudflareTunnel] Process error for ${identifier}:`, err);
+      activeTunnels.delete(identifier);
+      if (!resolved) {
+        reject(err);
+      }
+    });
+
+    // Timeout fallback after 25 seconds
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        child.kill();
+        reject(new Error("Timeout waiting for Cloudflare Tunnel URL. Is cloudflared installed?"));
+      }
+    }, 25000);
+  });
+}
+
+function stopCloudflareTunnel(identifier: string) {
+  const tunnel = activeTunnels.get(identifier);
+  if (tunnel) {
+    console.log(`[CloudflareTunnel] Stopping tunnel for ${identifier}`);
+    try {
+      tunnel.process.kill();
+    } catch (e) {
+      console.error(`[CloudflareTunnel] Error stopping tunnel for ${identifier}:`, e);
+    }
+    activeTunnels.delete(identifier);
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -172,6 +252,7 @@ async function startServer() {
     idleContainers.forEach(container => {
       console.log(`[ScalingManager] Auto-terminating idle container (IDLE > ${idleLimitMinutes}m): ${container.id}`);
       db.prepare("UPDATE containers SET status = 'terminated' WHERE id = ?").run(container.id);
+      stopCloudflareTunnel(container.id);
     });
   }, 30000); // Check every 30 seconds
 
@@ -182,7 +263,8 @@ async function startServer() {
       status: "ok", 
       time: new Date().toISOString(),
       env: process.env.NODE_ENV || "development",
-      port: PORT
+      port: PORT,
+      dashboard_tunnel_url: dashboardTunnelUrl
     });
   });
 
@@ -315,6 +397,7 @@ async function startServer() {
     const { id } = req.params;
     db.prepare("UPDATE containers SET status = 'terminated' WHERE id = ?").run(id);
     console.log(`[Orchestrator] Terminating container: ${id}`);
+    stopCloudflareTunnel(id);
     res.json({ success: true });
   });
 
@@ -392,11 +475,21 @@ async function startServer() {
   jlesage/firefox:latest \\
   bash -c "Xvfb :99 -screen 0 1280x1024x24 & export DISPLAY=:99 && firefox --kiosk ${login_url}"`;
 
+    let finalRemoteUrl = remoteUrl;
+    if (process.env.CLOUDFLARE_TUNNEL_ENABLED === "true") {
+      try {
+        console.log(`[Orchestrator] Spawning Cloudflare Tunnel for container port ${port}...`);
+        finalRemoteUrl = await startCloudflareTunnel(port, containerId);
+      } catch (err: any) {
+        console.error(`[Orchestrator] Cloudflare Tunnel failed for container ${containerId}, falling back to direct URL:`, err.message);
+      }
+    }
+
     // Persist container
     db.prepare(`
       INSERT INTO containers (id, name, email, domain, login_url, status, ip_address, remote_url, last_active)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).run(containerId, containerName, email, domain, login_url, "running", ipAddress, remoteUrl);
+    `).run(containerId, containerName, email, domain, login_url, "running", ipAddress, finalRemoteUrl);
 
     // Simulate "starting container" logic
     console.log(`[Orchestrator] Executing: ${docker_command}`);
@@ -410,7 +503,7 @@ async function startServer() {
       container_id: containerId,
       status: "running",
       ip_address: ipAddress,
-      remote_url: remoteUrl
+      remote_url: finalRemoteUrl
     });
   });
 
@@ -427,6 +520,19 @@ async function startServer() {
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+  }
+
+  if (process.env.CLOUDFLARE_TUNNEL_ENABLED === "true") {
+    startCloudflareTunnel(Number(PORT), "dashboard")
+      .then((url) => {
+        dashboardTunnelUrl = url;
+        console.log(`\n======================================================`);
+        console.log(`BLO Dashboard Tunnel Active: ${url}`);
+        console.log(`======================================================\n`);
+      })
+      .catch((err) => {
+        console.error("[CloudflareTunnel] Failed to start tunnel for dashboard:", err.message);
+      });
   }
 
   server.listen(Number(PORT), "0.0.0.0", () => {
